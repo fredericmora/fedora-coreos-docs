@@ -1,0 +1,116 @@
+= Storage specification
+
+== Introduction
+This section describes the FCOS Configuration (FCC) YAML format for defining the desired state of storage associated with a FCOS instance.
+
+The `storage` block contains a list of objects, which can be of the following type:
+
+* `disks`: List of disks
+* `raid`: List of RAID arrays
+* `filesystems`: List of filesystems
+* `files`: List of files to be written
+* `directories`: List of directories to be created
+* `links`: List of links to be created
+
+== Disks
+Every entry under the `disks` node must correspond to a unique device. For each device, specify a list of GPT partitions. The contents of `disks` is as follows. Unless specified as optional, all nodes are mandatory.
+
+* `device` (string): Absolute path of the disk device. Disks are typically referenced by the `+/dev/disk-by-*+` symlinks. Avoid specifying the disk device `/dev/sdx` directly: the system might re-enumerates devices at boot when new disks are inserted, which could change the order of the `/dev/sdx` devices. The `+/dev/disk-by-*+` symlinks will always point to the right devices.
+* `wipe_table` (boolean, optional): When true, Ignition will erase the partition table before doing anything else. Otherwise, the existing partition entries in the table will be left alone.
+* `partitions` (object list, optional): List of partitions to be written to the partition table of the device. Each partition occupies a slot in the table. You can either specify the slot directly with the `number` node, or specify `number: 0` and supply a unique `label`.
+** `label` (string, optional): GPT PARTLABEL for the partition.
+** `number` (integer, optional): Slot number occupied by the partition, starting at 1. Specify 0 to use the next available slot. If so, you should also specify a unique `label`.
+** `size_mib` (integer, optional): Size of the partition in mebibytes. If 0, the partition will be sized as large as possible. Note: 1 mebibytes = 1024 * 1024 bytes.
+** `start_mib` (integer, optional): Start position of the partition from the beginning of the disk, in mebibytes. If 0, the partition will be placed at the start of the largest block available.
+** `type_guid` (string, optional): Partition type GUID. If omitted, it will default to `0FC63DAF-8483-4772-8E79-3D69D8477DE4`, the Linux native file system GUID. The ultimate reference list for the type GUIDs is currently the https://sourceforge.net/p/gptfdisk/code/ci/master/tree/parttypes.cc[parttypes.cc] file in the GPT fdisk source code. A more readable list can be found in the https://en.wikipedia.org/wiki/GUID_Partition_Table#Partition_type_GUIDs[GUID Partition Table article on Wikipedia].
+** `guid` (string, optional): GUID of the partition. Must be unique. You can omit it if you are creating new partitions.
+** `wipe_partition_entry` (boolean, optional)
+true:: If true, Ignition will erase any existing partition that does not match this entry.
+false:: If false, Ignition will leave the partition unchanged but will fail.
+** `should_exist` (boolean, optional). Defaults to true.
+true:: If  true, the partition with the specified `number` will be created if it does not exist. If the partition exists, and `wipe_partition_entry` is false, then `number` must be specified and non-zero, and `label`, `start_mib`, `size_mib`, `guid` and `type_guid` must all be omitted.
+false:: If false and the partition exists, Ignition looks at the `wipe_partition_entry` value and deletes the partition if true, or fails if false.
+
+.Example for defining a disk containing some partitions
+[source,yaml]
+----
+variant: fcos
+version: 1.0.0
+storage:
+  disks:
+    device: /dev/disk/by-id/wwn-0x50014e2eb507fcdf <1>
+    wipe_table: true <2>
+    partitions:
+      - label: part1 <3>
+        number: 1
+        size_mib: 32768
+        start_mib: 0
+        type_guid: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
+      - label: part2 <4>
+        number: 0
+----
+<1> Mandatory. We use the World-Wide Number ID of the drive to ensure unicity.
+<2> This makes sure the partition table is recreated along with all the partitions.
+<3> The first partition (slot number 1) is 32 GiB and starts at the beginning of the device. Its `type_guid` identifies it as a Linux swap partition.
+<4> The second partition (implicit slot number 2) will be placed after partition 1 and will occupy the rest of the available space. It will be a Linux native partition since `type_guid` is not specified.
+
+== Raid
+
+Every entry under the `raid` node must correspond to a unique RAID array. The resulting configuration will be implemented as an mdadm "software" RAID. The contents of `raid` is as follows. Unless specified as optional, all nodes are mandatory.
+
+* `name` (string): Name of the resulting md device.
+* `level` (string): Redundancy level of the array. See the supported levels in the Fedora `mdadm` man page. Examples: `linear`, `raid0`, `raid`.
+* `devices` (list of strings): List of devices that should be part of the array, referenced by their absolute path.
+* `spares` (optional, integer): Number of spares in the array, if applicable.
+* `options` (optional, list of string): Additional options to be passed to `mdadm`.
+
+== File systems
+
+Entries under the `filesystems` node list the file systems that must be created and mounted. Each file system must have a unique device. The contents of `filesystems` is as follows. Unless specified as optional, all nodes are mandatory.
+
+* `path` (string): Mount point of of the filesystem while Ignition is running relative to where the root filesystem will be mounted. This is not necessarily the same as where it should be mounted in the real root, but it is encouraged to make it the same.
+* `device` (string) Absolute path of the device.
+* `format` (string): File system "format", that is, file system type. Accepted values: `ext4`, `btrfs`, `xfs`, `vfat`, or `swap`
+* `wipe_filesystem` (boolean, optional): If true, the device will be wiped before the file system is created.
+* `label` (string, optional): Label of the file system.
+* `uuid` (string, optional): UUID of the file system.
+* `options` (list of string, optional): Additional options to be passed to `mkfs`.
+
+.Example for defining a file system on  a RAID storage device
+[source,yaml]
+----
+variant: fcos
+version: 1.0.0
+storage:
+  disks:
+  - device: /dev/disk/by-id/wwn-0x50014ee261e524e4 <1>
+    wipe_table: true 
+    partitions: 
+    - label: "raid.1.1" <2>
+      number: 1 <3>
+      size_mib: 65536
+      start_mib: 0
+  - device: /dev/disk/by-id/wwn-0x50014ee0b8442cd3
+    wipe_table: true
+    partitions: 
+    - label: "raid.1.2"
+      number: 1
+      size_mib: 65536
+      start_mib: 0
+  raid:  <4>
+    - name: publicdata
+      level: raid1
+      devices: 
+      - /dev/disk/by-partlabel/raid.1.1
+      - /dev/disk/by-partlabel/raid.1.2
+  filesystems: <5>
+    - path: /var/publicdata
+      device: /dev/md/publicdata
+      format: ext4
+      label: PUB
+---
+<1> We define two partitions, each on its own disk. The disks are identified by their WWN.
+<2> Each partition gets a human-readable label
+<3> Each partition i placed at the beginning of the disk and is 64 GiB long.
+<4> We use the previously defined partitions as devices in a RAID1 md array.
+<5> The resulting md array is used to create an EXT4 file system.
