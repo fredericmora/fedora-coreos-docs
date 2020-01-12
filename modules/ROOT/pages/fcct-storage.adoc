@@ -108,9 +108,120 @@ storage:
       device: /dev/md/publicdata
       format: ext4
       label: PUB
----
+----
 <1> We define two partitions, each on its own disk. The disks are identified by their WWN.
 <2> Each partition gets a human-readable label
 <3> Each partition i placed at the beginning of the disk and is 64 GiB long.
 <4> We use the previously defined partitions as devices in a RAID1 md array.
 <5> The resulting md array is used to create an EXT4 file system.
+
+== Files
+The `files` node lets you define a list of files, identified by a unique path, that Ignition will create with the required contents and attributes if needed.
+
+An empty file would not be very useful, so the files can be defined with a `contents` option to specify either a source from which the file will be copied, or inline data.
+
+The contents of `files` is as follows. Unless specified as optional, all nodes are mandatory.
+
+* `path` (string): Absolute path of the file to be created. Must be unique.
+* `overwrite` (boolean, optional): Defaults to false. If true, `source` must be specified, and any preexisting file of the specified `path` will be overwritten with the contents of `source`.
+* `contents` (object, optional): Specifies the contents of the file.
+** `compression` (string, optional): Defaults to `null`. Type of compression of the source. Possible values are null or `gzip`. Compression cannot be specified if `source` uses an `s3` scheme.
+** `source` (string, optional).  Mandatory if `overwrite` is true. Mutually exclusive with option `inline`. Specifies the URL of the source to be copied to the `path`. Supported schemes are `http`, `https`, `tftp`, `s3`, and `data`[https://tools.ietf.org/html/rfc2397]. If you use the `http` scheme, it is recommended to specify a verification option to ensure the remote contents have not changed. If source is omitted, Ignition checks if the file already exists:
+File exists:: Ignition will do nothing.
+File does not exist:: Ignition will create an empty file.
+** `inline` (string, optional): Mutually exclusive with option `source`. Specifies a string that will be written to the file.
+** `verification` (object, optional): Lets Ignition verify the contents of the file. Currently, only one verification option has been implemented: `hash`.
+*** `hash` (string, mandatory if `verification` is specified): Hash of the file contents, in the form `+<type>-<value>+`. The only supported `type` is currently `sha512`.
+* `append` (object list, optional): This node has the same options as `source`. It specifies contents to be appended to the (presumably existing) file.
+** `compression`: See `contents`.
+** `source`: See `contents`.
+** `inline`: See `contents`.
+** `verification`: See `contents`.
+*** `hash`: See `contents`.
+* `mode` (integer, optional): Specifies the file's permission or mode. If `mode` is not specified, Ignition checks to see if the file already exists:
+File exists:: Keep the existing file mode if `overwrite` is false and `source` is not specified. Otherwise, set mode to octal 0644.
+File does not exist:: `mode` defaults to octal 0644.
+* `user` (object, optional): Specifies the user ID of the file owner. Either an ID or name must be specified.
+** `id` (integer, optional): User ID of the owner.
+** `name` (string, optional): User name of the owner.
+* `group` (object, optional): Specifies the group of the file owner. Either an ID or name must be specified.
+** `id` (integer, optional): Group ID of the owner.
+** `name` (string, optional): Group name of the owner.
+
+== Directories
+The `directories` node lets you specify a list of directories, identified by a unique path, that Ignition will create if needed.
+
+The `directories` structure is similar to the `files` structure. Unless specified as optional, all nodes are mandatory.
+
+* `path` (string): See Files
+* `overwrite` (boolean, optional): Defaults to false. If true, preexisting files or directories at the specified `path` are removed. If `overwrite` is false and a file system object already exists at the specified `path`, Ignition checks the type of the existing file system object:
+Existing path is a directory:: Ignition does nothing
+Existing path is not a directory:: Ignition fails.
+* `mode` (integer, optional): Specifies the directory's permission or mode. If `mode` is not specified, Ignition checks to see if the directory already exists:
+Directory exists:: if `overwrite` is false, Ignition does nothing, otherwise the mode is set to octal 0755.
+Directory does not exist:: The mode is set to 0755.
+* `user`: Specifies the directory owner. See Files.
+** `id`: See Files
+** `name`: See Files
+* `group`: Specifies the directory group. See Files.
+** `id`: See Files
+** `name`: See Files
+
+== Links
+The `links` node lets you specify links (hard or symbolic) that will be created by Ignition if needed.
+
+The contents of `links` is as follows. Unless specified as optional, all nodes are mandatory.
+
+* `path` (string): Absolute path of the link to be created. Must be unique.
+* `overwrite` (boolean, optional): Defaults to false. If false and a link already exists at the specified path, Ignition will only set the owner and group.
+* `user`: Specifies the link owner. See Files.
+** `id`: See Files
+** `name`: See Files
+* `group`: Specifies the link group. See Files.
+** `id`: See Files
+** `name`: See Files
+* `target` (string): Target path of the link.
+* `hard` (boolean, optional): Defaults to false. If true, Ignition will create a hard link. If false, it will create a symbolic link
+
+.Example for defining files, directories and links
+[source,yaml]
+----
+variant: fcos
+version: 1.0.0
+storage:
+  directories: <1>
+  - path: /opt/tools
+    overwrite: true
+  files:
+    - path: /var/helloworld <2>
+      overwrite: true
+      contents:
+        inline: Hello, world!
+      mode: 0644 <3>
+      user:
+        id: 500 <4>
+      group:
+        id: 500
+    - path: /opt/tools/transmogrifier <5>
+      overwrite: true
+      contents: <6>
+        source: https://mytools.example.com/path/to/archive.gzip
+        compression: gzip
+        verification:
+          hash: sha512-5c84785eb10c9efdea1f... <7>
+      mode: 0555 <8>
+  links:
+    - path: /usr/local/bin/transmogrifier <9>
+      overwrite: true
+      target: /opt/tools/transmogrifier
+      hard: false
+----
+<1> We create a directory. Its mode will be set to 0755 by default, that is, readable and executable by all, and also writable by the owner.
+<2> We create a file `/var/helloworld` containing a string defined in line.
+<3> The file mode is 0644 (readable by all, also writable by the owner).
+<4> The owner uid and group are defined by their numerical ID/
+<5> We need the nifty (and alas imaginary) transmogrifier tool.
+<6> We deploy this tool by copying an executable from an https link. The file is gzip-compressed.
+<7> The hash is `sha512-` followed by the 128 hex characters given by the `sha512sum` command.
+<8> We make the tool file readable and executable by all.
+<9> We symlink the tool location from `/usr/local/bin`. This is useful to let local processes invoke this tool without altering their `PATH` environment variable.
